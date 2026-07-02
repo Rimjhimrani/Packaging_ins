@@ -94,7 +94,12 @@ def extract_packaging_from_pdf(pdf_path: str):
     """Parse the TOFAA catalogue PDF once and return a packaging DataFrame.
 
     Extracts, per catalogue entry: Packaging Type, Price, Description and
-    Image (a PIL.Image, if an image is embedded on that page/section).
+    Image (a PIL.Image, if an image is embedded near that entry). Handles
+    catalogues where several packaging items appear stacked on the same
+    page (common in table/grid layouts), not just one item per page.
+    Only packaging data is ever extracted here — Product Name and Brand
+    Name are never read from this PDF; those come solely from the user's
+    text inputs in Step 1 of the app.
     Cached via st.cache_data so the PDF is only ever parsed a single time.
     """
     if not pdf_path:
@@ -105,56 +110,84 @@ def extract_packaging_from_pdf(pdf_path: str):
     except Exception:
         return pd.DataFrame(DEFAULT_PACKAGING)
 
+    def _page_events(page):
+        """Return (y0, kind, payload) events in top-to-bottom reading order:
+        kind='text' -> payload is a text block string
+        kind='image' -> payload is an image xref"""
+        events = []
+        try:
+            for b in (page.get_text("blocks") or []):
+                if len(b) >= 5 and isinstance(b[4], str) and b[4].strip():
+                    events.append((b[1], "text", b[4]))
+        except Exception:
+            pass
+        try:
+            for info in (page.get_image_info(xrefs=True) or []):
+                bbox, xref = info.get("bbox"), info.get("xref")
+                if bbox and xref:
+                    events.append((bbox[1], "image", xref))
+        except Exception:
+            pass
+        events.sort(key=lambda e: e[0])
+        return events
+
     records = []
     for page_index in range(len(doc)):
         page = doc[page_index]
-        text = page.get_text("text") or ""
-        if not text.strip():
+        events = _page_events(page)
+        if not events:
             continue
 
-        name_match = _PACKAGING_NAME_RE.search(text)
-        price_match = _PRICE_RE.search(text)
-        if not name_match and not price_match:
-            continue
-
-        name = name_match.group(1).strip() if name_match else f"Packaging Option {page_index + 1}"
-
-        price = 0
-        if price_match:
-            try:
-                price = int(float(price_match.group(1).replace(",", "")))
-            except ValueError:
-                price = 0
-
-        desc_lines = [l.strip() for l in text.splitlines() if l.strip()]
-        desc_lines = [l for l in desc_lines if l != name and not _PRICE_RE.search(l)]
-        description = " ".join(desc_lines[:6])[:400] or "Premium packaging option from the TOFAA catalogue."
-
-        img_obj = None
-        try:
-            images = page.get_images(full=True)
-            if images:
-                xref = images[0][0]
-                base_image = doc.extract_image(xref)
-                img_obj = Image.open(io.BytesIO(base_image["image"])).convert("RGB")
-        except Exception:
-            img_obj = None
-
-        records.append({
-            "Packaging Type": name,
-            "Price": price,
-            "Description": description,
-            "Image": img_obj,
-        })
+        current = None
+        for _y0, kind, payload in events:
+            if kind == "text":
+                for line in payload.splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    name_match = _PACKAGING_NAME_RE.search(line)
+                    if name_match:
+                        # Start of a new packaging item — flush the previous one
+                        if current is not None:
+                            records.append(current)
+                        current = {
+                            "Packaging Type": name_match.group(1).strip(),
+                            "Price": 0,
+                            "Image": None,
+                            "_desc_lines": [],
+                        }
+                        continue
+                    if current is None:
+                        continue  # skip text before the first recognised packaging item
+                    price_match = _PRICE_RE.search(line)
+                    if price_match and not current["Price"]:
+                        try:
+                            current["Price"] = int(float(price_match.group(1).replace(",", "")))
+                        except ValueError:
+                            pass
+                        continue
+                    current["_desc_lines"].append(line)
+            elif kind == "image" and current is not None and current["Image"] is None:
+                try:
+                    base_image = doc.extract_image(payload)
+                    current["Image"] = Image.open(io.BytesIO(base_image["image"])).convert("RGB")
+                except Exception:
+                    pass
+        if current is not None:
+            records.append(current)
 
     doc.close()
+
+    for r in records:
+        desc = " ".join(r.pop("_desc_lines", []))[:400]
+        r["Description"] = desc or "Premium packaging option from the TOFAA catalogue."
 
     if not records:
         return pd.DataFrame(DEFAULT_PACKAGING)
 
     df = pd.DataFrame(records)
-    df = df.drop_duplicates(subset=["Packaging Type"], keep="first").reset_index(drop=True)
     df = df[df["Packaging Type"].str.len() > 0].reset_index(drop=True)
+    df = df.drop_duplicates(subset=["Packaging Type"], keep="first").reset_index(drop=True)
     if df.empty:
         return pd.DataFrame(DEFAULT_PACKAGING)
     return df
