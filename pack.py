@@ -44,7 +44,7 @@ defaults = {
     "description": "",
     "product_img": None,
     "logo_img": None,
-    "packaging_type": "Premium Gift Box",
+    "packaging_type": "High Quality Paper Box",
     "material": "Rigid Board",
     "finish": "Matte",
     "effects": [],
@@ -66,6 +66,40 @@ GOLD = "#C9A227"
 GOLD_LIGHT = "#E8D9A0"
 BEIGE = "#F5F0E6"
 CREAM = "#FBF9F4"
+
+# ============================================================================
+# BOX SPECIFICATIONS (from TOFAA rate card)
+# ============================================================================
+BOX_SPECIFICATIONS = {
+    "High Quality Paper Box": {
+        "min_cost": 600,
+        "max_cost": 1500,
+        "description": "Golden foiling on box top with stunning design. Available as gift box or gift bag.",
+    },
+    "High Quality Leatherite Box": {
+        "min_cost": 2000,
+        "max_cost": 3000,
+        "description": "Premium leatherite finish gift box.",
+    },
+    "High Quality Luxury Suede Box": {
+        "min_cost": 2500,
+        "max_cost": 7000,
+        "description": "Premium suede box with electroplated company logo. Other colour options available.",
+    },
+    "Luxury Wooden Box (Photo Frame + Tray)": {
+        "min_cost": 2000,
+        "max_cost": 4000,
+        "description": "Luxury wooden box that converts into a photo frame, with a good quality tray.",
+    },
+}
+
+
+def box_spec_default_cost(spec_name: str) -> int:
+    """Midpoint cost for a given box specification, used as the base packaging price."""
+    spec = BOX_SPECIFICATIONS.get(spec_name)
+    if not spec:
+        return 700
+    return round((spec["min_cost"] + spec["max_cost"]) / 2)
 
 
 def inject_css():
@@ -579,8 +613,15 @@ def page_studio():
         c1, c2, c3 = st.columns(3)
         with c1:
             st.session_state.packaging_type = st.selectbox(
-                "Packaging Type",
-                ["Premium Gift Box", "Magnetic Box", "Paper Box", "Leather Box", "Gift Bag"],
+                "Box Specification",
+                list(BOX_SPECIFICATIONS.keys()),
+                index=list(BOX_SPECIFICATIONS.keys()).index(st.session_state.packaging_type)
+                if st.session_state.packaging_type in BOX_SPECIFICATIONS
+                else 0,
+            )
+            _spec = BOX_SPECIFICATIONS[st.session_state.packaging_type]
+            st.caption(
+                f"💰 Cost range: ₹{_spec['min_cost']} - ₹{_spec['max_cost']}  \n{_spec['description']}"
             )
             st.session_state.material = st.selectbox(
                 "Material",
@@ -749,8 +790,9 @@ def build_recommendations():
 
 
 def get_pricing_df():
+    box_cost = box_spec_default_cost(st.session_state.packaging_type)
     rows = [
-        ("Base Packaging", 700),
+        (f"Base Packaging ({st.session_state.packaging_type})", box_cost),
         ("Material", 250),
         ("Printing", 180),
         ("Gold Foiling", 150 if "Gold Foiling" in st.session_state.effects or not st.session_state.effects else 150),
