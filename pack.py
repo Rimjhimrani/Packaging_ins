@@ -51,116 +51,13 @@ defaults = {
     "theme_style": "Luxury",
     "primary_color": "#C9A227",
     "secondary_color": "#F5F0E6",
-    "style_label": "Elegant Luxury Cosmetic",
     "quantity": 250,
     "rotation": 0,
     "zoom": 100,
-    "manual_mode": False,
-    "variant_index": 0,
-    "last_auto_industry": None,
-    "preset_initialized": False,
 }
 for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
-
-# ============================================================================
-# AI INDUSTRY DESIGN PRESETS
-# Each industry maps to a set of AI "variants" (packaging_type, material,
-# finish, effects, theme, primary_color, secondary_color, style_label).
-# The AI auto-selects variant 0 the moment an industry is chosen; the
-# "Regenerate AI Variation" action cycles through the remaining variants.
-# No manual dropdown selection is required unless Manual Override is enabled.
-# ============================================================================
-INDUSTRY_PRESETS = {
-    "Cosmetics": [
-        ("Premium Gift Box", "Rigid Board", "Soft Touch", ["Gold Foiling", "Emboss Logo"],
-         "Luxury", "#C9A227", "#FFF8F0", "Elegant Luxury Cosmetic"),
-        ("Magnetic Box", "Premium Paper", "Matte", ["Emboss Logo", "Spot UV"],
-         "Elegant", "#7B4B94", "#F5EDF7", "Modern Beauty Edit"),
-        ("Premium Gift Box", "Rigid Board", "Gloss", ["Gold Foiling", "Ribbon"],
-         "Luxury", "#A63A50", "#FCEEE9", "Rose Luxe Glam"),
-    ],
-    "Electronics": [
-        ("Magnetic Box", "Corrugated", "Matte", ["Spot UV", "Emboss Logo"],
-         "Modern", "#1B1F3B", "#C0C0C0", "Sleek Tech Modern"),
-        ("Premium Gift Box", "Rigid Board", "Textured", ["Silver Foiling"],
-         "Minimal", "#2E2E2E", "#E5E5E5", "Industrial Minimal Tech"),
-        ("Magnetic Box", "Corrugated", "Gloss", ["Spot UV"],
-         "Modern", "#003366", "#D9E4EC", "Deep Blue Circuit"),
-    ],
-    # "Electrical" is treated as an alias of "Electronics" for AI preset matching
-    "Electrical": [
-        ("Magnetic Box", "Corrugated", "Matte", ["Spot UV", "Emboss Logo"],
-         "Modern", "#1B1F3B", "#C0C0C0", "Sleek Tech Modern"),
-        ("Premium Gift Box", "Rigid Board", "Textured", ["Silver Foiling"],
-         "Minimal", "#2E2E2E", "#E5E5E5", "Industrial Minimal Tech"),
-        ("Magnetic Box", "Corrugated", "Gloss", ["Spot UV"],
-         "Modern", "#003366", "#D9E4EC", "Deep Blue Circuit"),
-    ],
-    "Food": [
-        ("Paper Box", "Kraft Paper", "Matte", ["Ribbon"],
-         "Eco Friendly", "#6B8E23", "#F5E9DA", "Natural Eco Food"),
-        ("Paper Box", "Kraft Paper", "Textured", ["Deboss Logo"],
-         "Eco Friendly", "#8B5E3C", "#F1E4D3", "Rustic Farmhouse"),
-        ("Gift Bag", "Premium Paper", "Matte", ["Ribbon"],
-         "Minimal", "#C46A3B", "#FFF3E6", "Warm Artisan Food"),
-    ],
-    "Fashion": [
-        ("Leather Box", "Leather", "Gloss", ["Emboss Logo", "Deboss Logo"],
-         "Elegant", "#111111", "#C9A227", "Bold Fashion Statement"),
-        ("Leather Box", "Leather", "Matte", ["Deboss Logo"],
-         "Minimal", "#3B3B3B", "#E8D9A0", "Understated Chic"),
-        ("Premium Gift Box", "Rigid Board", "Soft Touch", ["Ribbon", "Emboss Logo"],
-         "Elegant", "#6E1E33", "#F2E3E7", "Runway Elegance"),
-    ],
-    "Jewellery": [
-        ("Premium Gift Box", "Rigid Board", "Soft Touch", ["Gold Foiling", "Magnetic Lock"],
-         "Luxury", "#7B2D26", "#E8D9A0", "Opulent Jewellery Case"),
-        ("Magnetic Box", "Rigid Board", "Gloss", ["Silver Foiling", "Magnetic Lock"],
-         "Elegant", "#4A4A68", "#EDEBF5", "Modern Gem Vault"),
-        ("Premium Gift Box", "Leather", "Soft Touch", ["Gold Foiling", "Emboss Logo"],
-         "Luxury", "#1F1B24", "#C9A227", "Midnight Gold Elite"),
-    ],
-    "Corporate Gifts": [
-        ("Gift Bag", "Premium Paper", "Matte", ["Ribbon", "Spot UV"],
-         "Modern", "#14213D", "#C9A227", "Professional Corporate"),
-        ("Premium Gift Box", "Rigid Board", "Matte", ["Emboss Logo"],
-         "Minimal", "#22333B", "#EAE7DC", "Executive Minimal"),
-        ("Magnetic Box", "Corrugated", "Textured", ["Spot UV", "Ribbon"],
-         "Modern", "#2B2D42", "#D9D9D9", "Sleek Boardroom Gift"),
-    ],
-}
-
-
-def apply_industry_preset(industry, variant_idx=0):
-    """AI auto-selects packaging design attributes based purely on Industry.
-    No manual selection required — this fully replaces the manual dropdown flow
-    unless the user explicitly turns on Manual Override."""
-    variants = INDUSTRY_PRESETS.get(industry, INDUSTRY_PRESETS["Cosmetics"])
-    idx = variant_idx % len(variants)
-    ptype, material, finish, effects, theme, primary, secondary, label = variants[idx]
-    st.session_state.packaging_type = ptype
-    st.session_state.material = material
-    st.session_state.finish = finish
-    st.session_state.effects = list(effects)
-    st.session_state.theme_style = theme
-    st.session_state.primary_color = primary
-    st.session_state.secondary_color = secondary
-    st.session_state.style_label = label
-    st.session_state.variant_index = idx
-    st.session_state.last_auto_industry = industry
-
-
-def _on_industry_change():
-    if not st.session_state.manual_mode:
-        apply_industry_preset(st.session_state.industry, 0)
-
-
-# Initialise the AI design for the default industry on first load
-if not st.session_state.preset_initialized:
-    apply_industry_preset(st.session_state.industry, 0)
-    st.session_state.preset_initialized = True
 
 # ============================================================================
 # THEME / CSS
@@ -658,12 +555,10 @@ def page_studio():
             with c1:
                 st.session_state.product_name = st.text_input("Product Name", st.session_state.product_name)
                 st.session_state.brand_name = st.text_input("Brand Name", st.session_state.brand_name)
-                st.selectbox(
+                st.session_state.industry = st.selectbox(
                     "Industry",
-                    ["Cosmetics", "Electronics", "Electrical", "Food", "Fashion", "Jewellery", "Corporate Gifts"],
-                    key="industry",
-                    on_change=_on_industry_change,
-                    help="AI automatically selects the packaging design the moment you choose an industry — no manual picking needed.",
+                    ["Cosmetics", "Electronics", "Food", "Fashion", "Jewellery", "Corporate Gifts"],
+                    index=["Cosmetics", "Electronics", "Food", "Fashion", "Jewellery", "Corporate Gifts"].index(st.session_state.industry),
                 )
             with c2:
                 prod_file = st.file_uploader("Upload Product Image", type=["png", "jpg", "jpeg"], key="prod_up")
@@ -677,104 +572,38 @@ def page_studio():
             st.session_state.description = st.text_area("Product Description", st.session_state.description, height=90)
             st.markdown('</div>', unsafe_allow_html=True)
 
-            if not st.session_state.manual_mode:
-                st.markdown(
-                    f"""<div class="glass-card" style="border-left:4px solid {GOLD};">
-                    🤖 <b>AI Auto-Design active:</b> based on <b>{st.session_state.industry}</b>,
-                    the AI has selected the <b>"{st.session_state.style_label}"</b> style
-                    ({st.session_state.packaging_type} · {st.session_state.material} · {st.session_state.finish}).
-                    No manual selection needed — see it live below and fine-tune in Step 2 if you like.</div>""",
-                    unsafe_allow_html=True,
-                )
-                label = st.session_state.brand_name or st.session_state.product_name or "TOFAA"
-                mock = generate_mockup(
-                    st.session_state.primary_color, st.session_state.secondary_color,
-                    st.session_state.logo_img, label,
-                    box_style="bag" if st.session_state.packaging_type == "Gift Bag" else "box",
-                )
-                pc1, pc2 = st.columns([1, 2])
-                with pc1:
-                    st.image(mock, caption="🤖 AI Live Preview", width=260)
-                with pc2:
-                    st.caption("This preview updates instantly whenever you change the Industry — the AI re-selects packaging type, material, finish, effects, theme and colors automatically.")
-
     # ---------- STEP 2 ----------
     with tabs[1]:
         st.markdown('<div class="section-title">⚙️ AI Packaging Preferences</div>', unsafe_allow_html=True)
-
-        top_c1, top_c2 = st.columns([2, 1])
-        with top_c1:
-            st.caption(f"🏷️ Industry: **{st.session_state.industry}** — design attributes are AI-selected automatically. No manual process required.")
-        with top_c2:
-            st.toggle("🎛️ Manual Override", key="manual_mode",
-                      help="Turn this on only if you want to hand-pick packaging type, material, finish, effects, theme or colors yourself.")
-
-        if not st.session_state.manual_mode:
-            # ---------------- FULLY AUTOMATIC AI DESIGN (default) ----------------
-            effects_badges = "".join(f'<span class="reco-badge">{e}</span>' for e in st.session_state.effects) or "<i>None</i>"
-            st.markdown(
-                f"""
-                <div class="glass-card">
-                    <div style="font-family:'Playfair Display',serif; font-size:1.15rem; color:{GOLD}; margin-bottom:0.5rem;">
-                        🤖 AI-Selected Design — "{st.session_state.style_label}"
-                    </div>
-                    <table style="width:100%; font-size:0.95rem;">
-                        <tr><td style="padding:4px 0; width:40%;">📦 Packaging Type</td><td><b>{st.session_state.packaging_type}</b></td></tr>
-                        <tr><td style="padding:4px 0;">🧱 Material</td><td><b>{st.session_state.material}</b></td></tr>
-                        <tr><td style="padding:4px 0;">✨ Finish</td><td><b>{st.session_state.finish}</b></td></tr>
-                        <tr><td style="padding:4px 0;">🎨 Theme</td><td><b>{st.session_state.theme_style}</b></td></tr>
-                        <tr><td style="padding:4px 0; vertical-align:top;">🌟 Special Effects</td><td>{effects_badges}</td></tr>
-                        <tr><td style="padding:4px 0;">🎨 Colors</td><td>
-                            <span style="display:inline-block;width:18px;height:18px;border-radius:50%;background:{st.session_state.primary_color};border:1px solid #ccc;vertical-align:middle;"></span>
-                            <span style="display:inline-block;width:18px;height:18px;border-radius:50%;background:{st.session_state.secondary_color};border:1px solid #ccc;vertical-align:middle;margin-left:4px;"></span>
-                        </td></tr>
-                    </table>
-                </div>
-                """,
-                unsafe_allow_html=True,
+        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.session_state.packaging_type = st.selectbox(
+                "Packaging Type",
+                ["Premium Gift Box", "Magnetic Box", "Paper Box", "Leather Box", "Gift Bag"],
             )
-            rc1, rc2 = st.columns([1, 2])
-            with rc1:
-                if st.button("🔁 Regenerate AI Variation", use_container_width=True):
-                    apply_industry_preset(st.session_state.industry, st.session_state.variant_index + 1)
-                    st.toast(f"AI selected a new variation: {st.session_state.style_label}", icon="🤖")
-            with rc2:
-                st.session_state.quantity = st.slider("Quantity", 50, 5000, st.session_state.quantity, step=50)
-
-        else:
-            # ---------------- MANUAL OVERRIDE (opt-in only) ----------------
-            st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                st.selectbox(
-                    "Packaging Type",
-                    ["Premium Gift Box", "Magnetic Box", "Paper Box", "Leather Box", "Gift Bag"],
-                    key="packaging_type",
-                )
-                st.selectbox(
-                    "Material",
-                    ["Kraft Paper", "Premium Paper", "Rigid Board", "Leather", "Corrugated"],
-                    key="material",
-                )
-            with c2:
-                st.selectbox("Finish", ["Matte", "Gloss", "Soft Touch", "Textured"], key="finish")
-                st.selectbox(
-                    "Theme", ["Luxury", "Minimal", "Modern", "Elegant", "Eco Friendly"], key="theme_style"
-                )
-            with c3:
-                st.multiselect(
-                    "Special Effects",
-                    ["Gold Foiling", "Silver Foiling", "Emboss Logo", "Deboss Logo", "Spot UV", "Ribbon", "Magnetic Lock"],
-                    key="effects",
-                )
-            c4, c5, c6 = st.columns(3)
-            with c4:
-                st.color_picker("Primary Color", key="primary_color")
-            with c5:
-                st.color_picker("Secondary Color", key="secondary_color")
-            with c6:
-                st.session_state.quantity = st.slider("Quantity", 50, 5000, st.session_state.quantity, step=50)
-            st.markdown('</div>', unsafe_allow_html=True)
+            st.session_state.material = st.selectbox(
+                "Material",
+                ["Kraft Paper", "Premium Paper", "Rigid Board", "Leather", "Corrugated"],
+            )
+        with c2:
+            st.session_state.finish = st.selectbox("Finish", ["Matte", "Gloss", "Soft Touch", "Textured"])
+            st.session_state.theme_style = st.selectbox(
+                "Theme", ["Luxury", "Minimal", "Modern", "Elegant", "Eco Friendly"]
+            )
+        with c3:
+            st.session_state.effects = st.multiselect(
+                "Special Effects",
+                ["Gold Foiling", "Silver Foiling", "Emboss Logo", "Deboss Logo", "Spot UV", "Ribbon", "Magnetic Lock"],
+            )
+        c4, c5, c6 = st.columns(3)
+        with c4:
+            st.session_state.primary_color = st.color_picker("Primary Color", st.session_state.primary_color)
+        with c5:
+            st.session_state.secondary_color = st.color_picker("Secondary Color", st.session_state.secondary_color)
+        with c6:
+            st.session_state.quantity = st.slider("Quantity", 50, 5000, st.session_state.quantity, step=50)
+        st.markdown('</div>', unsafe_allow_html=True)
 
         gen_col1, gen_col2 = st.columns([1, 3])
         with gen_col1:
@@ -829,9 +658,6 @@ def page_studio():
     # ---------- STEP 4 ----------
     with tabs[3]:
         st.markdown('<div class="section-title">🖼️ Live Packaging Preview</div>', unsafe_allow_html=True)
-        mode_note = "🤖 AI Auto-Design" if not st.session_state.manual_mode else "🎛️ Manual Override"
-        st.caption(f"{mode_note} · Industry: **{st.session_state.industry}** · Style: **{st.session_state.style_label}** — "
-                   f"this preview always reflects your current AI-selected (or overridden) design in real time.")
         pc1, pc2 = st.columns([3, 1])
         with pc2:
             st.session_state.rotation = st.slider("🔄 Rotate Preview", 0, 360, st.session_state.rotation, step=15)
