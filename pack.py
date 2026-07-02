@@ -38,13 +38,13 @@ defaults = {
     "selected_reco": None,
     "saved_designs": [],
     "generating": False,
-    "product_name": "",
-    "brand_name": "",
     "industry": "Cosmetics",
     "description": "",
     "product_img": None,
     "logo_img": None,
     "packaging_type": "High Quality Paper Box",
+    "hero_product": "None",
+    "side_product": "None",
     "material": "Rigid Board",
     "finish": "Matte",
     "effects": [],
@@ -99,6 +99,108 @@ def box_spec_default_cost(spec_name: str) -> int:
     spec = BOX_SPECIFICATIONS.get(spec_name)
     if not spec:
         return 700
+    return round((spec["min_cost"] + spec["max_cost"]) / 2)
+
+
+# ============================================================================
+# HERO PRODUCT OPTIONS (from TOFAA rate card)
+# ============================================================================
+HERO_PRODUCTS = {
+    "None": {"min_cost": 0, "max_cost": 0},
+    "Lamp - Luxury In Light": {"min_cost": 1500, "max_cost": 1700},
+    "3-in-1 Lamp, Penstand & Wireless Charger": {"min_cost": 1200, "max_cost": 1200},
+    "LED Expandable Lantern Lamp": {"min_cost": 1500, "max_cost": 1500},
+    "3-in-1 Lamp, Penstand & Phone Holder": {"min_cost": 1150, "max_cost": 1150},
+    "Steamer": {"min_cost": 1550, "max_cost": 1550},
+    "Beam Plus": {"min_cost": 750, "max_cost": 750},
+    "Plant Pot & Light": {"min_cost": 850, "max_cost": 850},
+    "Pen Stand With Wireless Charger": {"min_cost": 1050, "max_cost": 1050},
+    "Future Fan": {"min_cost": 1999, "max_cost": 1999},
+    "Air Storm II": {"min_cost": 1550, "max_cost": 1550},
+    "Blender": {"min_cost": 1550, "max_cost": 1550},
+    "Sound Bar - Celebrate With Sound": {"min_cost": 1500, "max_cost": 1500},
+    "Retro Jam - Relive The Retro": {"min_cost": 1250, "max_cost": 1250},
+    "Air Wave - Flow With Freedom": {"min_cost": 1950, "max_cost": 1950},
+    "Eye Massager - Relax Refresh Recharge": {"min_cost": 2700, "max_cost": 2700},
+    "Magsip Bottle - Modern Bottle": {"min_cost": 999, "max_cost": 999},
+    "Stanley Bottle - Modern Bottle": {"min_cost": 899, "max_cost": 899},
+    "Blender - Healthy Quick Easy": {"min_cost": 1450, "max_cost": 1450},
+    "3-in-1 Wireless Speaker + Digital Clock + LED Lamp": {"min_cost": 4500, "max_cost": 4500},
+    "3-in-1 Clock, LED Lamp & Wireless Charger": {"min_cost": 5750, "max_cost": 5750},
+    "Retro Gramophone Bluetooth Speaker": {"min_cost": 2500, "max_cost": 2500},
+    "LED Lamp With Wireless Charging & Speaker": {"min_cost": 2200, "max_cost": 2200},
+    "Executive Pour Set": {"min_cost": 2700, "max_cost": 2700},
+    "Chrone 4 All-In-One Sound & Light Station": {"min_cost": 6000, "max_cost": 6000},
+    "Knight Pen Holder": {"min_cost": 1600, "max_cost": 1600},
+    "Digital Frame With Personalised Message": {"min_cost": 3700, "max_cost": 3700},
+    "4-in-1 Digital Diary": {"min_cost": 2700, "max_cost": 2700},
+    "Secure Portfolio": {"min_cost": 700, "max_cost": 700},
+    "Secure The Smart Way": {"min_cost": 955, "max_cost": 955},
+    "Snug Shield Laptop Sleeve": {"min_cost": 1200, "max_cost": 1200},
+    "Laptop Sleeve": {"min_cost": 1999, "max_cost": 1999},
+    "Shawl - Wrap In Warmth": {"min_cost": 2000, "max_cost": 5000},
+    "Premium Women Shawl": {"min_cost": 1000, "max_cost": 1000},
+    "Premium Men Shawl": {"min_cost": 1000, "max_cost": 1000},
+    "Boat Rockerz 425 Headsets": {"min_cost": 1400, "max_cost": 1400},
+    "Boat Wave Magma Smart Watch": {"min_cost": 1500, "max_cost": 1500},
+    "Pebble Glide 10W Bluetooth Soundbar": {"min_cost": 2100, "max_cost": 2100},
+    "Pebble Disc With Digital Clock": {"min_cost": 2100, "max_cost": 2100},
+    "Silver Plated Photo Frame": {"min_cost": 1450, "max_cost": 1450},
+    "Peafowl Decor With Bowl (Suede Box)": {"min_cost": 7200, "max_cost": 7200},
+    "Bella Horse Bowl (Suede Box)": {"min_cost": 7200, "max_cost": 7200},
+    "Brass Luxury Dhoop Burner": {"min_cost": 700, "max_cost": 700},
+    "Brass Luxury Bell": {"min_cost": 650, "max_cost": 650},
+    "Premium Glass Diya Set": {"min_cost": 1200, "max_cost": 1200},
+    "Ramayan Manka A4": {"min_cost": 999, "max_cost": 999},
+    "Book Shaped Luxury & Compact Locker": {"min_cost": 1200, "max_cost": 1200},
+    "Personalised Stationery Set (Envelopes/Cards/Tags)": {"min_cost": 3500, "max_cost": 3500},
+    "Switch - Sleek Station": {"min_cost": 1755, "max_cost": 1755},
+    "Summit Laptop Sleeve": {"min_cost": 1799, "max_cost": 1799},
+    "The Elite Traveler's Kit": {"min_cost": 2450, "max_cost": 2450},
+}
+
+# ============================================================================
+# SIDE PRODUCTS & GOURMET OPTIONS (from TOFAA rate card)
+# ============================================================================
+SIDE_PRODUCTS = {
+    "None": {"min_cost": 0, "max_cost": 0},
+    "The Pyramid Lamp - Brighten Every Moment": {"min_cost": 410, "max_cost": 410},
+    "Foldable Calculator - Go Green Go Paperless": {"min_cost": 599, "max_cost": 599},
+    "Self Balancing Lamp": {"min_cost": 525, "max_cost": 525},
+    "Astro Keychain With Emergency Powerbank": {"min_cost": 999, "max_cost": 999},
+    "Cup With Clay Artwork": {"min_cost": 899, "max_cost": 1200},
+    "Auspicious Diya": {"min_cost": 300, "max_cost": 300},
+    "Premium Glass S Diya - Luxury Meets Tradition": {"min_cost": 355, "max_cost": 355},
+    "Premium Glass Diya - Luxury Meets Tradition": {"min_cost": 570, "max_cost": 570},
+    "Premium Glass Bell - Ring In Prosperity": {"min_cost": 375, "max_cost": 375},
+    "Wooden Planter Fridge Magnets": {"min_cost": 200, "max_cost": 200},
+    "Sustainable Dhoop - Concept Based Customised": {"min_cost": 170, "max_cost": 170},
+    "Decorative Table Clock (Concrete, With Branding)": {"min_cost": 535, "max_cost": 1375},
+    "Gangajal Sprinkler": {"min_cost": 275, "max_cost": 275},
+    "Diamond Shaped Paperweight": {"min_cost": 275, "max_cost": 275},
+    "Symbol of Wealth - Pyrite": {"min_cost": 450, "max_cost": 575},
+    "Dhan Yog Bracelet": {"min_cost": 355, "max_cost": 355},
+    "Dry Fruits / Healthy Seeds Jar (With Branding)": {"min_cost": 215, "max_cost": 500},
+    "Salient Sleeve": {"min_cost": 699, "max_cost": 699},
+    "Secure Loop": {"min_cost": 110, "max_cost": 110},
+    "Slyde Cardholder": {"min_cost": 110, "max_cost": 110},
+    "Sleek Snap": {"min_cost": 110, "max_cost": 110},
+    "Stick Me Phone Card Wallet": {"min_cost": 110, "max_cost": 110},
+    "Suitcase Saviour Luggage Tag": {"min_cost": 250, "max_cost": 250},
+    "Switch - Scribe Pen Stand": {"min_cost": 275, "max_cost": 275},
+    "Sydney Passport Cover": {"min_cost": 275, "max_cost": 275},
+    "Swell Roller": {"min_cost": 425, "max_cost": 425},
+    "Switch - Stockholm Key Holder": {"min_cost": 285, "max_cost": 285},
+    "Signature Luggage Tag": {"min_cost": 215, "max_cost": 215},
+    "Savvy Mobile Stand": {"min_cost": 215, "max_cost": 215},
+}
+
+
+def spec_default_cost(catalog: dict, name: str) -> int:
+    """Midpoint cost for a given item in a rate-card catalog (Box/Hero/Side)."""
+    spec = catalog.get(name)
+    if not spec:
+        return 0
     return round((spec["min_cost"] + spec["max_cost"]) / 2)
 
 
@@ -587,15 +689,13 @@ def page_studio():
             st.markdown('<div class="glass-card">', unsafe_allow_html=True)
             c1, c2 = st.columns(2)
             with c1:
-                st.session_state.product_name = st.text_input("Product Name", st.session_state.product_name)
-                st.session_state.brand_name = st.text_input("Brand Name", st.session_state.brand_name)
                 st.session_state.industry = st.selectbox(
-                    "Industry",
+                    "Industry / Gifting Occasion",
                     ["Cosmetics", "Electronics", "Food", "Fashion", "Jewellery", "Corporate Gifts"],
                     index=["Cosmetics", "Electronics", "Food", "Fashion", "Jewellery", "Corporate Gifts"].index(st.session_state.industry),
                 )
             with c2:
-                prod_file = st.file_uploader("Upload Product Image", type=["png", "jpg", "jpeg"], key="prod_up")
+                prod_file = st.file_uploader("Upload Reference Image (optional)", type=["png", "jpg", "jpeg"], key="prod_up")
                 logo_file = st.file_uploader("Upload Company Logo", type=["png", "jpg", "jpeg"], key="logo_up")
                 if prod_file:
                     st.session_state.product_img = Image.open(prod_file).convert("RGBA")
@@ -603,7 +703,7 @@ def page_studio():
                 if logo_file:
                     st.session_state.logo_img = Image.open(logo_file).convert("RGBA")
                     st.image(st.session_state.logo_img, width=120)
-            st.session_state.description = st.text_area("Product Description", st.session_state.description, height=90)
+            st.session_state.description = st.text_area("Packaging Brief / Notes", st.session_state.description, height=90)
             st.markdown('</div>', unsafe_allow_html=True)
 
     # ---------- STEP 2 ----------
@@ -637,6 +737,35 @@ def page_studio():
                 "Special Effects",
                 ["Gold Foiling", "Silver Foiling", "Emboss Logo", "Deboss Logo", "Spot UV", "Ribbon", "Magnetic Lock"],
             )
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+        h1, h2 = st.columns(2)
+        with h1:
+            st.session_state.hero_product = st.selectbox(
+                "Hero Product (optional)",
+                list(HERO_PRODUCTS.keys()),
+                index=list(HERO_PRODUCTS.keys()).index(st.session_state.hero_product)
+                if st.session_state.hero_product in HERO_PRODUCTS
+                else 0,
+            )
+            _hero = HERO_PRODUCTS[st.session_state.hero_product]
+            if st.session_state.hero_product != "None":
+                st.caption(f"💰 TOFAA rate: ₹{_hero['min_cost']} - ₹{_hero['max_cost']} + GST")
+        with h2:
+            st.session_state.side_product = st.selectbox(
+                "Side Product / Gourmet Option (optional)",
+                list(SIDE_PRODUCTS.keys()),
+                index=list(SIDE_PRODUCTS.keys()).index(st.session_state.side_product)
+                if st.session_state.side_product in SIDE_PRODUCTS
+                else 0,
+            )
+            _side = SIDE_PRODUCTS[st.session_state.side_product]
+            if st.session_state.side_product != "None":
+                st.caption(f"💰 TOFAA rate: ₹{_side['min_cost']} - ₹{_side['max_cost']} + GST")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
         c4, c5, c6 = st.columns(3)
         with c4:
             st.session_state.primary_color = st.color_picker("Primary Color", st.session_state.primary_color)
@@ -707,7 +836,7 @@ def page_studio():
             preview_type = st.radio("View", ["Box Front", "Side View", "Gift Bag"])
         with pc1:
             style = "bag" if preview_type == "Gift Bag" else "box"
-            label = st.session_state.brand_name or st.session_state.product_name or "TOFAA"
+            label = st.session_state.packaging_type.split(" ")[0].upper() if st.session_state.packaging_type else "TOFAA"
             mock = generate_mockup(
                 st.session_state.primary_color,
                 st.session_state.secondary_color,
@@ -798,6 +927,12 @@ def get_pricing_df():
         ("Gold Foiling", 150 if "Gold Foiling" in st.session_state.effects or not st.session_state.effects else 150),
         ("Ribbon", 70 if "Ribbon" in st.session_state.effects or not st.session_state.effects else 70),
     ]
+    if st.session_state.hero_product != "None":
+        hero_cost = spec_default_cost(HERO_PRODUCTS, st.session_state.hero_product)
+        rows.append((f"Hero Product ({st.session_state.hero_product})", hero_cost))
+    if st.session_state.side_product != "None":
+        side_cost = spec_default_cost(SIDE_PRODUCTS, st.session_state.side_product)
+        rows.append((f"Side Product ({st.session_state.side_product})", side_cost))
     subtotal = sum(r[1] for r in rows)
     gst = round(subtotal * 0.18)
     rows.append(("GST (18%)", gst))
@@ -840,10 +975,10 @@ def render_download_section():
     df, total = get_pricing_df()
 
     data = {
-        "Product Name": st.session_state.product_name or "N/A",
-        "Brand Name": st.session_state.brand_name or "N/A",
         "Industry": st.session_state.industry,
         "Packaging Type": st.session_state.packaging_type,
+        "Hero Product": st.session_state.hero_product if st.session_state.hero_product != "None" else "N/A",
+        "Side Product": st.session_state.side_product if st.session_state.side_product != "None" else "N/A",
         "Material": st.session_state.material,
         "Finish": st.session_state.finish,
         "Theme": st.session_state.theme_style,
@@ -857,7 +992,7 @@ def render_download_section():
                             file_name="TOFAA_Quotation.pdf", mime="application/pdf",
                             use_container_width=True)
     with c2:
-        label = st.session_state.brand_name or st.session_state.product_name or "TOFAA"
+        label = st.session_state.packaging_type.split(" ")[0].upper() if st.session_state.packaging_type else "TOFAA"
         mock = generate_mockup(st.session_state.primary_color, st.session_state.secondary_color,
                                 st.session_state.logo_img, label)
         buf = io.BytesIO()
@@ -899,7 +1034,7 @@ def page_saved():
         st.info("No saved designs yet. Save a project from the **Download** step in AI Packaging Studio.")
         return
     for i, d in enumerate(st.session_state.saved_designs):
-        with st.expander(f"📦 {d.get('Product Name', 'Design')} — {d.get('Brand Name', '')} ({d['Saved On']})"):
+        with st.expander(f"📦 {d.get('Packaging Type', 'Design')} — {d.get('Industry', '')} ({d['Saved On']})"):
             st.json(d)
 
 
