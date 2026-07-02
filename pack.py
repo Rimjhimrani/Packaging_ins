@@ -5,8 +5,6 @@ pricing, sustainability scoring, and quotation generation.
 """
 
 import io
-import os
-import re
 import random
 import time
 import base64
@@ -18,7 +16,6 @@ import plotly.graph_objects as go
 import plotly.express as px
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from fpdf import FPDF
-import fitz  # PyMuPDF
 
 # ============================================================================
 # PAGE CONFIG
@@ -29,194 +26,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
-# ============================================================================
-# PACKAGING CATALOGUE — AUTO-EXTRACTED FROM THE TOFAA PRODUCT CATALOGUE PDF
-# ----------------------------------------------------------------------------
-# The TOFAA catalogue PDF ships inside the project (no upload UI). On startup
-# we locate it, parse it once with PyMuPDF, and cache the resulting packaging
-# table (type, price, description, image) with st.cache_data so the PDF is
-# only ever read a single time per deployment. Every part of the app that
-# used to reference the old hardcoded packaging list now reads from this
-# cached DataFrame instead — the rest of the app is untouched.
-# ============================================================================
-
-# Candidate locations for the bundled catalogue PDF. Add/adjust paths here if
-# you place the file somewhere else in your project — no other code changes
-# are needed.
-PDF_CANDIDATE_PATHS = [
-    "TOFAA_DECK_WITH_RATES.pdf",
-    "TOFAA_Product_Catalogue.pdf",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "TOFAA_DECK_WITH_RATES.pdf"),
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "TOFAA_Product_Catalogue.pdf"),
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "TOFAA_DECK_WITH_RATES.pdf"),
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "TOFAA_DECK_WITH_RATES.pdf"),
-    "/mnt/data/TOFAA_DECK_WITH_RATES.pdf",
-]
-
-# Fallback packaging catalogue — used only if the PDF cannot be found or no
-# packaging entries could be parsed from it, so the app never breaks.
-DEFAULT_PACKAGING = [
-    {"Packaging Type": "Premium Gift Box", "Price": 700,
-     "Description": "Premium rigid gift box with a soft-touch finish, ideal for luxury cosmetics and gifting.",
-     "Image": None},
-    {"Packaging Type": "Magnetic Box", "Price": 650,
-     "Description": "Elegant magnetic-closure box with a clean, modern presentation.",
-     "Image": None},
-    {"Packaging Type": "Paper Box", "Price": 450,
-     "Description": "Eco-friendly kraft paper box suited for food and everyday retail packaging.",
-     "Image": None},
-    {"Packaging Type": "Leather Box", "Price": 950,
-     "Description": "Luxury leather-finish box for premium fashion and jewellery products.",
-     "Image": None},
-    {"Packaging Type": "Gift Bag", "Price": 380,
-     "Description": "Premium paper gift bag with a ribbon handle for corporate and retail gifting.",
-     "Image": None},
-]
-
-_PRICE_RE = re.compile(r'(?:₹|Rs\.?|INR)\s?([\d,]+(?:\.\d+)?)', re.IGNORECASE)
-_PACKAGING_NAME_RE = re.compile(
-    r'\b([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*){0,4}\s+'
-    r'(?:Box|Boxes|Bag|Bags|Frame|Frames|Case|Cases|Pouch|Pouches|Sleeve|Sleeves|Packaging))\b'
-)
-
-
-def _find_catalogue_pdf():
-    """Locate the bundled TOFAA catalogue PDF inside the project."""
-    for path in PDF_CANDIDATE_PATHS:
-        if path and os.path.exists(path):
-            return path
-    return None
-
-
-@st.cache_data(show_spinner=False)
-def extract_packaging_from_pdf(pdf_path: str):
-    """Parse the TOFAA catalogue PDF once and return a packaging DataFrame.
-
-    Extracts, per catalogue entry: Packaging Type, Price, Description and
-    Image (a PIL.Image, if an image is embedded near that entry). Handles
-    catalogues where several packaging items appear stacked on the same
-    page (common in table/grid layouts), not just one item per page.
-    Only packaging data is ever extracted here — Product Name and Brand
-    Name are never read from this PDF; those come solely from the user's
-    text inputs in Step 1 of the app.
-    Cached via st.cache_data so the PDF is only ever parsed a single time.
-    """
-    if not pdf_path:
-        return pd.DataFrame(DEFAULT_PACKAGING)
-
-    try:
-        doc = fitz.open(pdf_path)
-    except Exception:
-        return pd.DataFrame(DEFAULT_PACKAGING)
-
-    def _page_events(page):
-        """Return (y0, kind, payload) events in top-to-bottom reading order:
-        kind='text' -> payload is a text block string
-        kind='image' -> payload is an image xref"""
-        events = []
-        try:
-            for b in (page.get_text("blocks") or []):
-                if len(b) >= 5 and isinstance(b[4], str) and b[4].strip():
-                    events.append((b[1], "text", b[4]))
-        except Exception:
-            pass
-        try:
-            for info in (page.get_image_info(xrefs=True) or []):
-                bbox, xref = info.get("bbox"), info.get("xref")
-                if bbox and xref:
-                    events.append((bbox[1], "image", xref))
-        except Exception:
-            pass
-        events.sort(key=lambda e: e[0])
-        return events
-
-    records = []
-    for page_index in range(len(doc)):
-        page = doc[page_index]
-        events = _page_events(page)
-        if not events:
-            continue
-
-        current = None
-        for _y0, kind, payload in events:
-            if kind == "text":
-                for line in payload.splitlines():
-                    line = line.strip()
-                    if not line:
-                        continue
-                    name_match = _PACKAGING_NAME_RE.search(line)
-                    if name_match:
-                        # Start of a new packaging item — flush the previous one
-                        if current is not None:
-                            records.append(current)
-                        current = {
-                            "Packaging Type": name_match.group(1).strip(),
-                            "Price": 0,
-                            "Image": None,
-                            "_desc_lines": [],
-                        }
-                        continue
-                    if current is None:
-                        continue  # skip text before the first recognised packaging item
-                    price_match = _PRICE_RE.search(line)
-                    if price_match and not current["Price"]:
-                        try:
-                            current["Price"] = int(float(price_match.group(1).replace(",", "")))
-                        except ValueError:
-                            pass
-                        continue
-                    current["_desc_lines"].append(line)
-            elif kind == "image" and current is not None and current["Image"] is None:
-                try:
-                    base_image = doc.extract_image(payload)
-                    current["Image"] = Image.open(io.BytesIO(base_image["image"])).convert("RGB")
-                except Exception:
-                    pass
-        if current is not None:
-            records.append(current)
-
-    doc.close()
-
-    for r in records:
-        desc = " ".join(r.pop("_desc_lines", []))[:400]
-        r["Description"] = desc or "Premium packaging option from the TOFAA catalogue."
-
-    if not records:
-        return pd.DataFrame(DEFAULT_PACKAGING)
-
-    df = pd.DataFrame(records)
-    df = df[df["Packaging Type"].str.len() > 0].reset_index(drop=True)
-    df = df.drop_duplicates(subset=["Packaging Type"], keep="first").reset_index(drop=True)
-    if df.empty:
-        return pd.DataFrame(DEFAULT_PACKAGING)
-    return df
-
-
-_CATALOGUE_PDF_PATH = _find_catalogue_pdf()
-PACKAGING_DF = extract_packaging_from_pdf(_CATALOGUE_PDF_PATH)
-PACKAGING_TYPES = PACKAGING_DF["Packaging Type"].tolist()
-
-
-def get_packaging_info(packaging_type_name: str) -> dict:
-    """Best-effort lookup of catalogue data (image/price/description) for a
-    given packaging type name, matching AI-preset names to the closest
-    catalogue entry when an exact match isn't available."""
-    if PACKAGING_DF.empty:
-        return DEFAULT_PACKAGING[0]
-
-    exact = PACKAGING_DF[PACKAGING_DF["Packaging Type"].str.lower() == str(packaging_type_name).lower()]
-    if not exact.empty:
-        return exact.iloc[0].to_dict()
-
-    first_word = str(packaging_type_name).split()[0] if packaging_type_name else ""
-    if first_word:
-        contains = PACKAGING_DF[PACKAGING_DF["Packaging Type"].str.contains(first_word, case=False, na=False)]
-        if not contains.empty:
-            return contains.iloc[0].to_dict()
-
-    return PACKAGING_DF.iloc[0].to_dict()
-
 
 # ============================================================================
 # SESSION STATE INITIALISATION
@@ -235,123 +44,20 @@ defaults = {
     "description": "",
     "product_img": None,
     "logo_img": None,
-    "packaging_type": "Premium Gift Box",
+    "packaging_type": "High Quality Paper Box",
     "material": "Rigid Board",
     "finish": "Matte",
     "effects": [],
     "theme_style": "Luxury",
     "primary_color": "#C9A227",
     "secondary_color": "#F5F0E6",
-    "style_label": "Elegant Luxury Cosmetic",
     "quantity": 250,
     "rotation": 0,
     "zoom": 100,
-    "manual_mode": False,
-    "variant_index": 0,
-    "last_auto_industry": None,
-    "preset_initialized": False,
 }
 for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
-
-# ============================================================================
-# AI INDUSTRY DESIGN PRESETS
-# Each industry maps to a set of AI "variants" (packaging_type, material,
-# finish, effects, theme, primary_color, secondary_color, style_label).
-# The AI auto-selects variant 0 the moment an industry is chosen; the
-# "Regenerate AI Variation" action cycles through the remaining variants.
-# No manual dropdown selection is required unless Manual Override is enabled.
-# ============================================================================
-INDUSTRY_PRESETS = {
-    "Cosmetics": [
-        ("Premium Gift Box", "Rigid Board", "Soft Touch", ["Gold Foiling", "Emboss Logo"],
-         "Luxury", "#C9A227", "#FFF8F0", "Elegant Luxury Cosmetic"),
-        ("Magnetic Box", "Premium Paper", "Matte", ["Emboss Logo", "Spot UV"],
-         "Elegant", "#7B4B94", "#F5EDF7", "Modern Beauty Edit"),
-        ("Premium Gift Box", "Rigid Board", "Gloss", ["Gold Foiling", "Ribbon"],
-         "Luxury", "#A63A50", "#FCEEE9", "Rose Luxe Glam"),
-    ],
-    "Electronics": [
-        ("Magnetic Box", "Corrugated", "Matte", ["Spot UV", "Emboss Logo"],
-         "Modern", "#1B1F3B", "#C0C0C0", "Sleek Tech Modern"),
-        ("Premium Gift Box", "Rigid Board", "Textured", ["Silver Foiling"],
-         "Minimal", "#2E2E2E", "#E5E5E5", "Industrial Minimal Tech"),
-        ("Magnetic Box", "Corrugated", "Gloss", ["Spot UV"],
-         "Modern", "#003366", "#D9E4EC", "Deep Blue Circuit"),
-    ],
-    # "Electrical" is treated as an alias of "Electronics" for AI preset matching
-    "Electrical": [
-        ("Magnetic Box", "Corrugated", "Matte", ["Spot UV", "Emboss Logo"],
-         "Modern", "#1B1F3B", "#C0C0C0", "Sleek Tech Modern"),
-        ("Premium Gift Box", "Rigid Board", "Textured", ["Silver Foiling"],
-         "Minimal", "#2E2E2E", "#E5E5E5", "Industrial Minimal Tech"),
-        ("Magnetic Box", "Corrugated", "Gloss", ["Spot UV"],
-         "Modern", "#003366", "#D9E4EC", "Deep Blue Circuit"),
-    ],
-    "Food": [
-        ("Paper Box", "Kraft Paper", "Matte", ["Ribbon"],
-         "Eco Friendly", "#6B8E23", "#F5E9DA", "Natural Eco Food"),
-        ("Paper Box", "Kraft Paper", "Textured", ["Deboss Logo"],
-         "Eco Friendly", "#8B5E3C", "#F1E4D3", "Rustic Farmhouse"),
-        ("Gift Bag", "Premium Paper", "Matte", ["Ribbon"],
-         "Minimal", "#C46A3B", "#FFF3E6", "Warm Artisan Food"),
-    ],
-    "Fashion": [
-        ("Leather Box", "Leather", "Gloss", ["Emboss Logo", "Deboss Logo"],
-         "Elegant", "#111111", "#C9A227", "Bold Fashion Statement"),
-        ("Leather Box", "Leather", "Matte", ["Deboss Logo"],
-         "Minimal", "#3B3B3B", "#E8D9A0", "Understated Chic"),
-        ("Premium Gift Box", "Rigid Board", "Soft Touch", ["Ribbon", "Emboss Logo"],
-         "Elegant", "#6E1E33", "#F2E3E7", "Runway Elegance"),
-    ],
-    "Jewellery": [
-        ("Premium Gift Box", "Rigid Board", "Soft Touch", ["Gold Foiling", "Magnetic Lock"],
-         "Luxury", "#7B2D26", "#E8D9A0", "Opulent Jewellery Case"),
-        ("Magnetic Box", "Rigid Board", "Gloss", ["Silver Foiling", "Magnetic Lock"],
-         "Elegant", "#4A4A68", "#EDEBF5", "Modern Gem Vault"),
-        ("Premium Gift Box", "Leather", "Soft Touch", ["Gold Foiling", "Emboss Logo"],
-         "Luxury", "#1F1B24", "#C9A227", "Midnight Gold Elite"),
-    ],
-    "Corporate Gifts": [
-        ("Gift Bag", "Premium Paper", "Matte", ["Ribbon", "Spot UV"],
-         "Modern", "#14213D", "#C9A227", "Professional Corporate"),
-        ("Premium Gift Box", "Rigid Board", "Matte", ["Emboss Logo"],
-         "Minimal", "#22333B", "#EAE7DC", "Executive Minimal"),
-        ("Magnetic Box", "Corrugated", "Textured", ["Spot UV", "Ribbon"],
-         "Modern", "#2B2D42", "#D9D9D9", "Sleek Boardroom Gift"),
-    ],
-}
-
-
-def apply_industry_preset(industry, variant_idx=0):
-    """AI auto-selects packaging design attributes based purely on Industry.
-    No manual selection required — this fully replaces the manual dropdown flow
-    unless the user explicitly turns on Manual Override."""
-    variants = INDUSTRY_PRESETS.get(industry, INDUSTRY_PRESETS["Cosmetics"])
-    idx = variant_idx % len(variants)
-    ptype, material, finish, effects, theme, primary, secondary, label = variants[idx]
-    st.session_state.packaging_type = ptype
-    st.session_state.material = material
-    st.session_state.finish = finish
-    st.session_state.effects = list(effects)
-    st.session_state.theme_style = theme
-    st.session_state.primary_color = primary
-    st.session_state.secondary_color = secondary
-    st.session_state.style_label = label
-    st.session_state.variant_index = idx
-    st.session_state.last_auto_industry = industry
-
-
-def _on_industry_change():
-    if not st.session_state.manual_mode:
-        apply_industry_preset(st.session_state.industry, 0)
-
-
-# Initialise the AI design for the default industry on first load
-if not st.session_state.preset_initialized:
-    apply_industry_preset(st.session_state.industry, 0)
-    st.session_state.preset_initialized = True
 
 # ============================================================================
 # THEME / CSS
@@ -360,6 +66,40 @@ GOLD = "#C9A227"
 GOLD_LIGHT = "#E8D9A0"
 BEIGE = "#F5F0E6"
 CREAM = "#FBF9F4"
+
+# ============================================================================
+# BOX SPECIFICATIONS (from TOFAA rate card)
+# ============================================================================
+BOX_SPECIFICATIONS = {
+    "High Quality Paper Box": {
+        "min_cost": 600,
+        "max_cost": 1500,
+        "description": "Golden foiling on box top with stunning design. Available as gift box or gift bag.",
+    },
+    "High Quality Leatherite Box": {
+        "min_cost": 2000,
+        "max_cost": 3000,
+        "description": "Premium leatherite finish gift box.",
+    },
+    "High Quality Luxury Suede Box": {
+        "min_cost": 2500,
+        "max_cost": 7000,
+        "description": "Premium suede box with electroplated company logo. Other colour options available.",
+    },
+    "Luxury Wooden Box (Photo Frame + Tray)": {
+        "min_cost": 2000,
+        "max_cost": 4000,
+        "description": "Luxury wooden box that converts into a photo frame, with a good quality tray.",
+    },
+}
+
+
+def box_spec_default_cost(spec_name: str) -> int:
+    """Midpoint cost for a given box specification, used as the base packaging price."""
+    spec = BOX_SPECIFICATIONS.get(spec_name)
+    if not spec:
+        return 700
+    return round((spec["min_cost"] + spec["max_cost"]) / 2)
 
 
 def inject_css():
@@ -690,7 +430,7 @@ def generate_mockup(primary, secondary, logo_img, label_text, rotation=0, zoom=1
     return img
 
 
-def build_pdf_quote(data, pricing_df, total, packaging_info=None, selected_reco=None):
+def build_pdf_quote(data, pricing_df, total):
     # Core PDF fonts (Helvetica) don't support the ₹ glyph -> use "Rs." for PDF output
     pricing_df = pricing_df.copy()
     pricing_df["Price"] = pricing_df["Price"].astype(str).str.replace("₹", "Rs. ", regex=False)
@@ -732,31 +472,6 @@ def build_pdf_quote(data, pricing_df, total, packaging_info=None, selected_reco=
     pdf.set_font("Helvetica", "B", 12)
     pdf.cell(120, 9, "TOTAL", border=1)
     pdf.cell(60, 9, f"Rs. {total}", border=1, ln=True)
-
-    # ---- Selected Packaging (image, from TOFAA catalogue PDF) ----
-    if packaging_info and packaging_info.get("Image") is not None:
-        try:
-            img_buf = io.BytesIO()
-            packaging_info["Image"].save(img_buf, format="PNG")
-            img_buf.seek(0)
-            pdf.ln(6)
-            pdf.set_font("Helvetica", "B", 13)
-            pdf.cell(0, 8, "Selected Packaging", ln=True)
-            pdf.image(img_buf, w=55)
-            pdf.ln(2)
-        except Exception:
-            pass
-
-    # ---- AI Recommendation ----
-    if selected_reco:
-        pdf.ln(4)
-        pdf.set_font("Helvetica", "B", 13)
-        pdf.cell(0, 8, "AI Recommendation", ln=True)
-        pdf.set_font("Helvetica", "", 11)
-        pdf.cell(0, 7, f"Recommended Collection: {selected_reco.get('name', '')}", ln=True)
-        pdf.cell(0, 7, f"Tags: {', '.join(selected_reco.get('tags', []))}", ln=True)
-        pdf.cell(0, 7, f"Estimated Cost: Rs. {selected_reco.get('cost', '')}", ln=True)
-        pdf.cell(0, 7, f"AI Confidence: {selected_reco.get('confidence', '')}%", ln=True)
 
     pdf.ln(8)
     pdf.set_font("Helvetica", "I", 10)
@@ -874,12 +589,10 @@ def page_studio():
             with c1:
                 st.session_state.product_name = st.text_input("Product Name", st.session_state.product_name)
                 st.session_state.brand_name = st.text_input("Brand Name", st.session_state.brand_name)
-                st.selectbox(
+                st.session_state.industry = st.selectbox(
                     "Industry",
-                    ["Cosmetics", "Electronics", "Electrical", "Food", "Fashion", "Jewellery", "Corporate Gifts"],
-                    key="industry",
-                    on_change=_on_industry_change,
-                    help="AI automatically selects the packaging design the moment you choose an industry — no manual picking needed.",
+                    ["Cosmetics", "Electronics", "Food", "Fashion", "Jewellery", "Corporate Gifts"],
+                    index=["Cosmetics", "Electronics", "Food", "Fashion", "Jewellery", "Corporate Gifts"].index(st.session_state.industry),
                 )
             with c2:
                 prod_file = st.file_uploader("Upload Product Image", type=["png", "jpg", "jpeg"], key="prod_up")
@@ -893,123 +606,45 @@ def page_studio():
             st.session_state.description = st.text_area("Product Description", st.session_state.description, height=90)
             st.markdown('</div>', unsafe_allow_html=True)
 
-            if not st.session_state.manual_mode:
-                st.markdown(
-                    f"""<div class="glass-card" style="border-left:4px solid {GOLD};">
-                    🤖 <b>AI Auto-Design active:</b> based on <b>{st.session_state.industry}</b>,
-                    the AI has selected the <b>"{st.session_state.style_label}"</b> style
-                    ({st.session_state.packaging_type} · {st.session_state.material} · {st.session_state.finish}).
-                    No manual selection needed — see it live below and fine-tune in Step 2 if you like.</div>""",
-                    unsafe_allow_html=True,
-                )
-                label = st.session_state.brand_name or st.session_state.product_name or "TOFAA"
-                mock = generate_mockup(
-                    st.session_state.primary_color, st.session_state.secondary_color,
-                    st.session_state.logo_img, label,
-                    box_style="bag" if st.session_state.packaging_type == "Gift Bag" else "box",
-                )
-                pc1, pc2 = st.columns([1, 2])
-                with pc1:
-                    st.image(mock, caption="🤖 AI Live Preview", width=260)
-                with pc2:
-                    st.caption("This preview updates instantly whenever you change the Industry — the AI re-selects packaging type, material, finish, effects, theme and colors automatically.")
-
     # ---------- STEP 2 ----------
     with tabs[1]:
         st.markdown('<div class="section-title">⚙️ AI Packaging Preferences</div>', unsafe_allow_html=True)
-
-        top_c1, top_c2 = st.columns([2, 1])
-        with top_c1:
-            st.caption(f"🏷️ Industry: **{st.session_state.industry}** — design attributes are AI-selected automatically. No manual process required.")
-        with top_c2:
-            st.toggle("🎛️ Manual Override", key="manual_mode",
-                      help="Turn this on only if you want to hand-pick packaging type, material, finish, effects, theme or colors yourself.")
-
-        if not st.session_state.manual_mode:
-            # ---------------- FULLY AUTOMATIC AI DESIGN (default) ----------------
-            effects_badges = "".join(f'<span class="reco-badge">{e}</span>' for e in st.session_state.effects) or "<i>None</i>"
-            st.markdown(
-                f"""
-                <div class="glass-card">
-                    <div style="font-family:'Playfair Display',serif; font-size:1.15rem; color:{GOLD}; margin-bottom:0.5rem;">
-                        🤖 AI-Selected Design — "{st.session_state.style_label}"
-                    </div>
-                    <table style="width:100%; font-size:0.95rem;">
-                        <tr><td style="padding:4px 0; width:40%;">📦 Packaging Type</td><td><b>{st.session_state.packaging_type}</b></td></tr>
-                        <tr><td style="padding:4px 0;">🧱 Material</td><td><b>{st.session_state.material}</b></td></tr>
-                        <tr><td style="padding:4px 0;">✨ Finish</td><td><b>{st.session_state.finish}</b></td></tr>
-                        <tr><td style="padding:4px 0;">🎨 Theme</td><td><b>{st.session_state.theme_style}</b></td></tr>
-                        <tr><td style="padding:4px 0; vertical-align:top;">🌟 Special Effects</td><td>{effects_badges}</td></tr>
-                        <tr><td style="padding:4px 0;">🎨 Colors</td><td>
-                            <span style="display:inline-block;width:18px;height:18px;border-radius:50%;background:{st.session_state.primary_color};border:1px solid #ccc;vertical-align:middle;"></span>
-                            <span style="display:inline-block;width:18px;height:18px;border-radius:50%;background:{st.session_state.secondary_color};border:1px solid #ccc;vertical-align:middle;margin-left:4px;"></span>
-                        </td></tr>
-                    </table>
-                </div>
-                """,
-                unsafe_allow_html=True,
+        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.session_state.packaging_type = st.selectbox(
+                "Box Specification",
+                list(BOX_SPECIFICATIONS.keys()),
+                index=list(BOX_SPECIFICATIONS.keys()).index(st.session_state.packaging_type)
+                if st.session_state.packaging_type in BOX_SPECIFICATIONS
+                else 0,
             )
-            rc1, rc2 = st.columns([1, 2])
-            with rc1:
-                if st.button("🔁 Regenerate AI Variation", use_container_width=True):
-                    apply_industry_preset(st.session_state.industry, st.session_state.variant_index + 1)
-                    st.toast(f"AI selected a new variation: {st.session_state.style_label}", icon="🤖")
-            with rc2:
-                st.session_state.quantity = st.slider("Quantity", 50, 5000, st.session_state.quantity, step=50)
-
-        else:
-            # ---------------- MANUAL OVERRIDE (opt-in only) ----------------
-            st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                st.selectbox(
-                    "Packaging Type",
-                    PACKAGING_TYPES,
-                    key="packaging_type",
-                )
-                st.selectbox(
-                    "Material",
-                    ["Kraft Paper", "Premium Paper", "Rigid Board", "Leather", "Corrugated"],
-                    key="material",
-                )
-            with c2:
-                st.selectbox("Finish", ["Matte", "Gloss", "Soft Touch", "Textured"], key="finish")
-                st.selectbox(
-                    "Theme", ["Luxury", "Minimal", "Modern", "Elegant", "Eco Friendly"], key="theme_style"
-                )
-            with c3:
-                st.multiselect(
-                    "Special Effects",
-                    ["Gold Foiling", "Silver Foiling", "Emboss Logo", "Deboss Logo", "Spot UV", "Ribbon", "Magnetic Lock"],
-                    key="effects",
-                )
-            c4, c5, c6 = st.columns(3)
-            with c4:
-                st.color_picker("Primary Color", key="primary_color")
-            with c5:
-                st.color_picker("Secondary Color", key="secondary_color")
-            with c6:
-                st.session_state.quantity = st.slider("Quantity", 50, 5000, st.session_state.quantity, step=50)
-            st.markdown('</div>', unsafe_allow_html=True)
-
-        # ---------------- PACKAGING DETAILS (auto-extracted from TOFAA catalogue PDF) ----------------
-        st.markdown('<div class="section-title">📦 Packaging Details (TOFAA Catalogue)</div>', unsafe_allow_html=True)
-        _pkg_info = get_packaging_info(st.session_state.packaging_type)
-        pd1, pd2 = st.columns([1, 2])
-        with pd1:
-            if _pkg_info.get("Image") is not None:
-                st.image(_pkg_info["Image"], width=220, caption=st.session_state.packaging_type)
-            else:
-                st.info("No catalogue image available for this packaging type.")
-        with pd2:
-            st.markdown(
-                f"""<div class="glass-card">
-                <div style="font-weight:600; font-size:1.05rem;">{st.session_state.packaging_type}</div>
-                <div style="color:{GOLD}; font-weight:700; font-size:1.2rem; margin-top:0.3rem;">₹{_pkg_info.get('Price', 0)}</div>
-                <div style="margin-top:0.4rem; color:gray; font-size:0.9rem;">{_pkg_info.get('Description', '')}</div>
-                </div>""",
-                unsafe_allow_html=True,
+            _spec = BOX_SPECIFICATIONS[st.session_state.packaging_type]
+            st.caption(
+                f"💰 Cost range: ₹{_spec['min_cost']} - ₹{_spec['max_cost']}  \n{_spec['description']}"
             )
+            st.session_state.material = st.selectbox(
+                "Material",
+                ["Kraft Paper", "Premium Paper", "Rigid Board", "Leather", "Corrugated"],
+            )
+        with c2:
+            st.session_state.finish = st.selectbox("Finish", ["Matte", "Gloss", "Soft Touch", "Textured"])
+            st.session_state.theme_style = st.selectbox(
+                "Theme", ["Luxury", "Minimal", "Modern", "Elegant", "Eco Friendly"]
+            )
+        with c3:
+            st.session_state.effects = st.multiselect(
+                "Special Effects",
+                ["Gold Foiling", "Silver Foiling", "Emboss Logo", "Deboss Logo", "Spot UV", "Ribbon", "Magnetic Lock"],
+            )
+        c4, c5, c6 = st.columns(3)
+        with c4:
+            st.session_state.primary_color = st.color_picker("Primary Color", st.session_state.primary_color)
+        with c5:
+            st.session_state.secondary_color = st.color_picker("Secondary Color", st.session_state.secondary_color)
+        with c6:
+            st.session_state.quantity = st.slider("Quantity", 50, 5000, st.session_state.quantity, step=50)
+        st.markdown('</div>', unsafe_allow_html=True)
 
         gen_col1, gen_col2 = st.columns([1, 3])
         with gen_col1:
@@ -1064,9 +699,6 @@ def page_studio():
     # ---------- STEP 4 ----------
     with tabs[3]:
         st.markdown('<div class="section-title">🖼️ Live Packaging Preview</div>', unsafe_allow_html=True)
-        mode_note = "🤖 AI Auto-Design" if not st.session_state.manual_mode else "🎛️ Manual Override"
-        st.caption(f"{mode_note} · Industry: **{st.session_state.industry}** · Style: **{st.session_state.style_label}** — "
-                   f"this preview always reflects your current AI-selected (or overridden) design in real time.")
         pc1, pc2 = st.columns([3, 1])
         with pc2:
             st.session_state.rotation = st.slider("🔄 Rotate Preview", 0, 360, st.session_state.rotation, step=15)
@@ -1158,10 +790,9 @@ def build_recommendations():
 
 
 def get_pricing_df():
-    _pkg_info = get_packaging_info(st.session_state.packaging_type)
-    base_packaging_price = int(_pkg_info.get("Price") or 700)
+    box_cost = box_spec_default_cost(st.session_state.packaging_type)
     rows = [
-        ("Base Packaging", base_packaging_price),
+        (f"Base Packaging ({st.session_state.packaging_type})", box_cost),
         ("Material", 250),
         ("Printing", 180),
         ("Gold Foiling", 150 if "Gold Foiling" in st.session_state.effects or not st.session_state.effects else 150),
@@ -1207,14 +838,12 @@ def render_cost_estimator():
 def render_download_section():
     st.markdown('<div class="section-title">📦 Download Section</div>', unsafe_allow_html=True)
     df, total = get_pricing_df()
-    _pkg_info = get_packaging_info(st.session_state.packaging_type)
 
     data = {
         "Product Name": st.session_state.product_name or "N/A",
         "Brand Name": st.session_state.brand_name or "N/A",
         "Industry": st.session_state.industry,
         "Packaging Type": st.session_state.packaging_type,
-        "Packaging Price": f"₹{_pkg_info.get('Price', 0)}",
         "Material": st.session_state.material,
         "Finish": st.session_state.finish,
         "Theme": st.session_state.theme_style,
@@ -1223,8 +852,7 @@ def render_download_section():
 
     c1, c2, c3 = st.columns(3)
     with c1:
-        pdf_bytes = build_pdf_quote(data, df, total, packaging_info=_pkg_info,
-                                     selected_reco=st.session_state.selected_reco)
+        pdf_bytes = build_pdf_quote(data, df, total)
         st.download_button("📄 Download PDF Quote", data=pdf_bytes,
                             file_name="TOFAA_Quotation.pdf", mime="application/pdf",
                             use_container_width=True)
