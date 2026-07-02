@@ -5,9 +5,11 @@ pricing, sustainability scoring, and quotation generation.
 """
 
 import io
+import re
 import random
 import time
 import base64
+import hashlib
 from datetime import datetime
 
 import streamlit as st
@@ -16,6 +18,19 @@ import plotly.graph_objects as go
 import plotly.express as px
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from fpdf import FPDF
+
+# PDF catalogue extraction libraries
+try:
+    import fitz  # PyMuPDF
+    PYMUPDF_AVAILABLE = True
+except Exception:
+    PYMUPDF_AVAILABLE = False
+
+try:
+    import pdfplumber
+    PDFPLUMBER_AVAILABLE = True
+except Exception:
+    PDFPLUMBER_AVAILABLE = False
 
 # ============================================================================
 # PAGE CONFIG
@@ -54,6 +69,14 @@ defaults = {
     "quantity": 250,
     "rotation": 0,
     "zoom": 100,
+    # ---- Catalogue extraction state ----
+    "catalogue_df": None,
+    "catalogue_file_hash": None,
+    "selected_catalogue_product": None,
+    "catalogue_mrp": "",
+    "catalogue_tofaa_price": "",
+    "catalogue_category": "",
+    "catalogue_product_img": None,
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -100,6 +123,170 @@ def box_spec_default_cost(spec_name: str) -> int:
     if not spec:
         return 700
     return round((spec["min_cost"] + spec["max_cost"]) / 2)
+
+
+# ============================================================================
+# TOFAA CATALOGUE PDF EXTRACTION
+# ============================================================================
+PLACEHOLDER_SIZE = (400, 400)
+# Footer/logo image sizes commonly repeated across catalogue pages — skip these
+# when hunting for the "main" product image on a page.
+_KNOWN_FOOTER_SIZES = {(648, 266)}
+
+_CATEGORY_KEYWORDS = {
+    "Electronics": ["speaker", "charger", "bluetooth", "led", "lamp", "sound", "fan",
+                    "blender", "steamer", "digital", "clock", "headset", "watch",
+                    "powerbank", "calculator", "gramophone"],
+    "Home & Decor": ["diya", "bell", "decor", "planter", "frame", "clock", "burner",
+                     "gangajal", "paperweight", "bowl"],
+    "Accessories": ["sleeve", "wallet", "cardholder", "bag", "loop", "portfolio",
+                     "bracelet", "shawl"],
+    "Stationery & Gifting": ["envelope", "card", "diary", "pen", "penstand", "locker",
+                              "ramayan", "book"],
+    "Wellness & Food": ["dry fruits", "seeds", "jar", "attar", "dhoop"],
+}
+
+
+def _placeholder_image():
+    """Generate a simple placeholder image used when a product image can't be found."""
+    img = Image.new("RGBA", PLACEHOLDER_SIZE, (245, 240, 230, 255))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle([10, 10, PLACEHOLDER_SIZE[0] - 10, PLACEHOLDER_SIZE[1] - 10],
+                   outline=(201, 162, 39, 255), width=4)
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 22)
+    except Exception:
+        font = ImageFont.load_default()
+    text = "IMAGE\nNOT\nAVAILABLE"
+    draw.multiline_text((PLACEHOLDER_SIZE[0] / 2, PLACEHOLDER_SIZE[1] / 2), text,
+                         fill=(150, 130, 90, 255), font=font, anchor="mm", align="center", spacing=6)
+    return img
+
+
+PLACEHOLDER_IMAGE = _placeholder_image()
+
+
+def _categorize_product(name: str) -> str:
+    lname = (name or "").lower()
+    for category, keywords in _CATEGORY_KEYWORDS.items():
+        if any(k in lname for k in keywords):
+            return category
+    return "General Gifting"
+
+
+def _extract_main_image(doc, page):
+    """Pick the largest embedded image on a page, skipping known footer/logo sizes."""
+    best_pix = None
+    best_area = 0
+    for img_info in page.get_images(full=True):
+        xref = img_info[0]
+        try:
+            pix = fitz.Pixmap(doc, xref)
+            if pix.n - pix.alpha > 3:
+                pix = fitz.Pixmap(fitz.csRGB, pix)
+            if (pix.width, pix.height) in _KNOWN_FOOTER_SIZES:
+                continue
+            if pix.width < 60 or pix.height < 60:
+                continue
+            area = pix.width * pix.height
+            if area > best_area:
+                best_area = area
+                best_pix = pix
+        except Exception:
+            continue
+    if best_pix is None:
+        return None
+    try:
+        img_bytes = best_pix.tobytes("png")
+        return Image.open(io.BytesIO(img_bytes)).convert("RGBA")
+    except Exception:
+        return None
+
+
+def _parse_price_line(text, label_pattern):
+    match = re.search(label_pattern, text, re.IGNORECASE)
+    if not match:
+        return "N/A"
+    return re.sub(r"\s+", " ", match.group(1)).strip(" -")
+
+
+@st.cache_data(show_spinner=False)
+def _extract_catalogue_cached(pdf_bytes: bytes, file_hash: str):
+    """Parse the TOFAA catalogue PDF once (cached by file hash) and return a
+    JSON-serialisable record list (images are stored as PNG bytes since PIL
+    Image objects aren't hashable/cacheable directly)."""
+    records = []
+    if not PYMUPDF_AVAILABLE:
+        return records
+
+    mrp_pattern = r"MRP\s*-?\s*([\d,]+(?:\s*-\s*[\d,]+)?)"
+    rate_pattern = r"TOFAA\s*RATE\s*-?\s*([\d,]+(?:\s*-\s*[\d,]+)?)"
+
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    for page_num in range(len(doc)):
+        page = doc[page_num]
+        text = page.get_text() or ""
+        has_mrp = re.search(mrp_pattern, text, re.IGNORECASE)
+        has_rate = re.search(rate_pattern, text, re.IGNORECASE)
+        if not has_mrp and not has_rate:
+            continue  # not a product page
+
+        lines = [l.strip() for l in text.split("\n") if l.strip()]
+        name = lines[0] if lines else f"Product (Page {page_num + 1})"
+        name = re.sub(r"\s+", " ", name).strip().title()
+
+        mrp_val = _parse_price_line(text, mrp_pattern)
+        rate_val = _parse_price_line(text, rate_pattern)
+        category = _categorize_product(name)
+
+        img = _extract_main_image(doc, page)
+        img_bytes = None
+        if img is not None:
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            img_bytes = buf.getvalue()
+
+        records.append({
+            "Page": page_num + 1,
+            "Product Name": name,
+            "Category": category,
+            "MRP": mrp_val,
+            "TOFAA Price": rate_val,
+            "Image Bytes": img_bytes,
+        })
+    doc.close()
+    return records
+
+
+def extract_catalogue_dataframe(uploaded_file):
+    """Extract product data from an uploaded TOFAA catalogue PDF, parsing the
+    file only once per upload (cached in session_state by file hash)."""
+    pdf_bytes = uploaded_file.getvalue()
+    file_hash = hashlib.md5(pdf_bytes).hexdigest()
+
+    if st.session_state.catalogue_file_hash == file_hash and st.session_state.catalogue_df is not None:
+        return st.session_state.catalogue_df
+
+    with st.spinner("📖 Reading TOFAA catalogue and extracting products..."):
+        records = _extract_catalogue_cached(pdf_bytes, file_hash)
+
+    df = pd.DataFrame(records, columns=["Page", "Product Name", "Category", "MRP", "TOFAA Price", "Image Bytes"])
+    st.session_state.catalogue_df = df
+    st.session_state.catalogue_file_hash = file_hash
+    return df
+
+
+def get_catalogue_product_image(row):
+    """Return a PIL Image for a catalogue row, falling back to a placeholder."""
+    if row is None:
+        return PLACEHOLDER_IMAGE
+    img_bytes = row.get("Image Bytes")
+    if not img_bytes:
+        return PLACEHOLDER_IMAGE
+    try:
+        return Image.open(io.BytesIO(img_bytes)).convert("RGBA")
+    except Exception:
+        return PLACEHOLDER_IMAGE
 
 
 def inject_css():
@@ -430,7 +617,7 @@ def generate_mockup(primary, secondary, logo_img, label_text, rotation=0, zoom=1
     return img
 
 
-def build_pdf_quote(data, pricing_df, total):
+def build_pdf_quote(data, pricing_df, total, product_img=None, logo_img=None, ai_recommendation=None):
     # Core PDF fonts (Helvetica) don't support the ₹ glyph -> use "Rs." for PDF output
     pricing_df = pricing_df.copy()
     pricing_df["Price"] = pricing_df["Price"].astype(str).str.replace("₹", "Rs. ", regex=False)
@@ -445,11 +632,25 @@ def build_pdf_quote(data, pricing_df, total):
     pdf.set_xy(10, 6)
     pdf.cell(0, 10, "TOFAA AI Packaging Studio - Quotation", ln=True)
 
+    # Company logo, top-right of header band (if provided)
+    if logo_img is not None:
+        try:
+            pdf.image(logo_img.convert("RGB"), x=178, y=3, w=18, h=18)
+        except Exception:
+            pass
+
     pdf.set_text_color(40, 35, 25)
     pdf.ln(10)
     pdf.set_font("Helvetica", "", 11)
     pdf.cell(0, 8, f"Date: {datetime.now().strftime('%d %b %Y, %H:%M')}", ln=True)
     pdf.ln(2)
+
+    # Product image thumbnail (extracted from catalogue), falls back to placeholder
+    if product_img is not None:
+        try:
+            pdf.image(product_img.convert("RGB"), x=160, y=pdf.get_y(), w=38, h=38)
+        except Exception:
+            pass
 
     pdf.set_font("Helvetica", "B", 13)
     pdf.cell(0, 8, "Product & Brand Details", ln=True)
@@ -472,6 +673,18 @@ def build_pdf_quote(data, pricing_df, total):
     pdf.set_font("Helvetica", "B", 12)
     pdf.cell(120, 9, "TOTAL", border=1)
     pdf.cell(60, 9, f"Rs. {total}", border=1, ln=True)
+
+    if ai_recommendation:
+        pdf.ln(6)
+        pdf.set_font("Helvetica", "B", 13)
+        pdf.cell(0, 8, "AI Recommendation", ln=True)
+        pdf.set_font("Helvetica", "", 11)
+        reco_text = (
+            f"{ai_recommendation.get('name', '')} - Estimated Cost Rs. {ai_recommendation.get('cost', '')} "
+            f"(AI Confidence {ai_recommendation.get('confidence', '')}%). "
+            f"Tags: {', '.join(ai_recommendation.get('tags', []))}."
+        )
+        pdf.multi_cell(0, 6, reco_text)
 
     pdf.ln(8)
     pdf.set_font("Helvetica", "I", 10)
@@ -583,11 +796,66 @@ def page_studio():
     # ---------- STEP 1 ----------
     with tabs[0]:
         st.markdown('<div class="section-title">🧾 Product Information</div>', unsafe_allow_html=True)
+
+        # ---- TOFAA Catalogue Upload & Auto-Extraction ----
+        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+        st.markdown("**📚 Upload TOFAA Catalogue PDF** — products, images & rates are extracted automatically.")
+        catalogue_file = st.file_uploader(
+            "Upload TOFAA Catalogue PDF", type=["pdf"], key="catalogue_up"
+        )
+        if catalogue_file is not None:
+            if not PYMUPDF_AVAILABLE:
+                st.error("PyMuPDF (fitz) is not installed. Run `pip install pymupdf` to enable catalogue extraction.")
+            else:
+                cat_df = extract_catalogue_dataframe(catalogue_file)
+                if cat_df.empty:
+                    st.warning("No products with MRP / TOFAA Rate could be detected in this PDF.")
+                else:
+                    st.success(f"✅ Extracted {len(cat_df)} products from the catalogue.")
+
+                    sc1, sc2 = st.columns([1.2, 1.8])
+                    with sc1:
+                        search_term = st.text_input("🔍 Search Product", key="catalogue_search")
+                    filtered_df = cat_df
+                    if search_term:
+                        filtered_df = cat_df[cat_df["Product Name"].str.contains(search_term, case=False, na=False)]
+
+                    with sc2:
+                        options = ["— Select a product —"] + filtered_df["Product Name"].tolist()
+                        chosen = st.selectbox("Select Product", options, key="catalogue_select")
+
+                    if chosen and chosen != "— Select a product —":
+                        row = filtered_df[filtered_df["Product Name"] == chosen].iloc[0]
+                        st.session_state.selected_catalogue_product = chosen
+                        st.session_state.product_name = row["Product Name"]
+                        st.session_state.catalogue_mrp = row["MRP"]
+                        st.session_state.catalogue_tofaa_price = row["TOFAA Price"]
+                        st.session_state.catalogue_category = row["Category"]
+                        prod_img = get_catalogue_product_image(row)
+                        st.session_state.catalogue_product_img = prod_img
+                        st.session_state.product_img = prod_img
+
+                        pc1, pc2 = st.columns([1, 2])
+                        with pc1:
+                            st.image(prod_img, width=140, caption=chosen)
+                        with pc2:
+                            st.markdown(
+                                f"""**Product Name:** {row['Product Name']}  
+                                **Category:** {row['Category']}  
+                                **MRP:** ₹{row['MRP']}  
+                                **TOFAA Price:** ₹{row['TOFAA Price']}"""
+                            )
+        st.markdown('</div>', unsafe_allow_html=True)
+
         with st.container():
             st.markdown('<div class="glass-card">', unsafe_allow_html=True)
             c1, c2 = st.columns(2)
             with c1:
-                st.session_state.product_name = st.text_input("Product Name", st.session_state.product_name)
+                if st.session_state.catalogue_df is not None and not st.session_state.catalogue_df.empty:
+                    st.text_input("Product Name", st.session_state.product_name, disabled=True,
+                                  help="Auto-filled from the selected catalogue product. Upload/search above to change.")
+                else:
+                    st.session_state.product_name = st.text_input("Product Name", st.session_state.product_name)
                 st.session_state.brand_name = st.text_input("Brand Name", st.session_state.brand_name)
                 st.session_state.industry = st.selectbox(
                     "Industry",
@@ -595,10 +863,11 @@ def page_studio():
                     index=["Cosmetics", "Electronics", "Food", "Fashion", "Jewellery", "Corporate Gifts"].index(st.session_state.industry),
                 )
             with c2:
-                prod_file = st.file_uploader("Upload Product Image", type=["png", "jpg", "jpeg"], key="prod_up")
+                prod_file = st.file_uploader("Upload Product Image (optional override)", type=["png", "jpg", "jpeg"], key="prod_up")
                 logo_file = st.file_uploader("Upload Company Logo", type=["png", "jpg", "jpeg"], key="logo_up")
                 if prod_file:
                     st.session_state.product_img = Image.open(prod_file).convert("RGBA")
+                if st.session_state.product_img is not None:
                     st.image(st.session_state.product_img, width=120)
                 if logo_file:
                     st.session_state.logo_img = Image.open(logo_file).convert("RGBA")
@@ -849,10 +1118,22 @@ def render_download_section():
         "Theme": st.session_state.theme_style,
         "Quantity": st.session_state.quantity,
     }
+    if st.session_state.catalogue_mrp:
+        data["Catalogue MRP"] = f"₹{st.session_state.catalogue_mrp}"
+    if st.session_state.catalogue_tofaa_price:
+        data["Catalogue TOFAA Price"] = f"₹{st.session_state.catalogue_tofaa_price}"
+    if st.session_state.catalogue_category:
+        data["Catalogue Category"] = st.session_state.catalogue_category
 
     c1, c2, c3 = st.columns(3)
     with c1:
-        pdf_bytes = build_pdf_quote(data, df, total)
+        quote_product_img = st.session_state.catalogue_product_img or st.session_state.product_img
+        pdf_bytes = build_pdf_quote(
+            data, df, total,
+            product_img=quote_product_img,
+            logo_img=st.session_state.logo_img,
+            ai_recommendation=st.session_state.selected_reco,
+        )
         st.download_button("📄 Download PDF Quote", data=pdf_bytes,
                             file_name="TOFAA_Quotation.pdf", mime="application/pdf",
                             use_container_width=True)
